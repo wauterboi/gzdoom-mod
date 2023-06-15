@@ -1,0 +1,10 @@
+{
+	"Lua.workspace.library": [
+		"${3rd}/luassert/library",
+		"/home/theis/.vscode-server/data/User/globalStorage/sumneko.lua/addonManager/addons/busted/module/library",
+		"/home/theis/.vscode-server/data/User/globalStorage/sumneko.lua/addonManager/addons/penlight/module/library",
+		"${3rd}/lfs/library",
+		"/home/theis/.vscode-server/data/User/globalStorage/sumneko.lua/addonManager/addons/argparse/module/library"
+	],
+	"Lua.workspace.checkThirdParty": false
+}
