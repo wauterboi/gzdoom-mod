@@ -49,7 +49,7 @@ local reset = require 'ansikit.text' .reset
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
----All available status styles and display text
+---All available status color ANSI escape sequences and display text
 ---@type table<LogStatusType, LogStatusStyle>
 log.status = {
 	okay = {
@@ -71,8 +71,9 @@ for key, value in pairs(log.status) do
 end
 --------------------------------------------------------------------------------
 ---Log a timestampped message of a certain status using `io.write`
----@param status LogStatusType
----@param ... string
+---@param status LogStatusType The status the message is reoprting
+---@param ... string Anything to append to the message
+---@return string # The formatted string (without supplementled new line)
 log.add = function(status, ...)
 	local buffer = {}
 	local index = 7
