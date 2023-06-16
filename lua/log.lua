@@ -70,6 +70,8 @@ for key, value in pairs(log.status) do
 	value.text = key
 end
 --------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
 ---Log a timestampped message of a certain status using `io.write`
 ---@param status LogStatusType The status the message is reoprting
 ---@param ... string Anything to append to the message
