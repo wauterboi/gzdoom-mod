@@ -17,8 +17,7 @@ local log = {}
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
----A simple alias to specify that the string returned is an ANSI formatting
----escape sequence
+---A simple alias to specify that the string returned is an ANSI formatting escape sequence
 ---@alias LogColorANSI string
 --------------------------------------------------------------------------------
 

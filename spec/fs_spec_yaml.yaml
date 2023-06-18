@@ -1,0 +1,11 @@
+- name: "Casiopea 1st"
+  from: 1976
+  to: 1989
+- name: "Casiopea 2nd"
+  from: 1990
+  to: 2006
+- name: "Casiopea 3rd"
+  from: 2012
+  to: 2022
+- name: "Casiopea-P4"
+  from: 2022
