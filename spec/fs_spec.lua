@@ -1,4 +1,4 @@
-local fs = require 'fs'
+local fs = require 'lib.fs'
 local path = require 'pl.path'
 
 describe('fs', function()
