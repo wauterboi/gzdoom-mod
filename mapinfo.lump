@@ -1,5 +1,5 @@
 GameInfo {
   PlayerClasses = "AaPlayer"
-  NormForwardMove = 1.0, 1.0
-  NormSideMove = 1.0, 1.0
+  NormForwardMove = 25.0, 25.0
+  NormSideMove = 25.0, 25.0
 }

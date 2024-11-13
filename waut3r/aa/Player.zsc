@@ -23,6 +23,10 @@ class AaPlayer : DoomPlayer {
   double AirResistance;
   property AirResistance: AirResistance;
 
+  // Multiplier on strafe force while crouching.
+  double CrouchMultiplier;
+  property CrouchMultiplier: CrouchMultiplier; 
+
   // Multiplier on strafe force while running.
   double SpeedMultiplier;
   property SpeedMultiplier: SpeedMultiplier;
@@ -62,20 +66,21 @@ class AaPlayer : DoomPlayer {
   int StaminaAmount;
 
   //
-  AaMoveState State;
+  AaMoveState MoveState;
 
   default {
-    Speed 20.0;
+    Speed 1.0;
     Friction 1.0;
     AaPlayer.AirControl 0.75;
     AaPlayer.AirResistance 0.9;
-    AaPlayer.SpeedMultiplier 2.0;
+    AaPlayer.SpeedMultiplier 1.5;
+    AaPlayer.CrouchMultiplier 0.5;
     AaPlayer.StaminaMax TICRATE;
     AaPlayer.StaminaDecRate 1;
     AaPlayer.StaminaIncRate 2;
     AaPlayer.WaterControl 0.75;
     AaPlayer.WaterResistance 0.8;
-    Player.JumpZ 5.0;
+    Player.JumpZ 3.5;
   }
 
   // Called before the first call to tick. Overidden to initialize values.
@@ -96,6 +101,9 @@ class AaPlayer : DoomPlayer {
     self.UpdateTurnTicks();
     self.UpdateOnGround();
 
+    // Extra logic
+    self.UpdateMoveState();
+
     // If frozen...
     if (self.ReactionTime) {
       self.ReactionTime--;
@@ -108,19 +116,21 @@ class AaPlayer : DoomPlayer {
     self.HandleJumping();
   }
 
-  // Apply bobbing to current weapon.
+  // Apply bobbing to camera and weapon.
   void ApplyBob(double _bob_force) {
     UserCmd cmd = self.Player.Cmd;
     double _forward_move = cmd.ForwardMove;
     double _side_move = cmd.SideMove;
 
-    if (_forward_move) {
-      self.Bob(self.Angle, _forward_move * _bob_force / 256.0, true);
-    }
+    _bob_force *= 1.0 / (self.AirTics + 1.0) ** 2.0;
 
-    if (_side_move) {
-      self.Bob(self.Angle - 90, _side_move * _bob_force / 256.0, false);
-    }
+    // if (_forward_move) {
+    //   self.Bob(self.Angle, _forward_move * _bob_force / 256.0, true);
+    // }
+
+    // if (_side_move) {
+    //   self.Bob(self.Angle - 90, _side_move * _bob_force / 256.0, false);
+    // }
   }
 
   // Move player based on strafe axis, player speeds, and given base force
@@ -151,25 +161,12 @@ class AaPlayer : DoomPlayer {
     return _base_force, _bob_force;
   }
 
-  // Determine if player is on the ground, swimming, or in the air.
-  AaMoveState GetMoveState() {
-    if (self.Player.OnGround && !self.bNoGravity) {
-      return MOVE_GROUND;
-    }
-    if (!self.WaterLevel) {
-      return MOVE_AIR;
-    }
-    return MOVE_WATER;
-  }
-
   // Calculate and apply movement based on the player's movement state.
   void HandleStrafing() {
-    AaMoveState _move_state = self.GetMoveState();
-
     double _base_force, _bob_force;
     [_base_force, _bob_force] = self.GetBaseStrafeForces();
 
-    switch (_move_state) {
+    switch (self.MoveState) {
       case(MOVE_WATER):
         HandleWaterStrafing(_base_force, _bob_force);
         break;
@@ -199,8 +196,8 @@ class AaPlayer : DoomPlayer {
     bool _allow_stamina = true;
 
     if (self.CanCrouch() && self.Player.CrouchFactor != 1) {
-      _base_force *= self.Player.CrouchFactor;
-      _bob_force *= self.Player.CrouchFactor;
+      _base_force *= self.Player.CrouchFactor * self.CrouchMultiplier;
+      _bob_force *= self.Player.CrouchFactor * self.CrouchMultiplier;
       _allow_stamina = false;
     }
 
@@ -211,12 +208,15 @@ class AaPlayer : DoomPlayer {
       _allow_stamina = false;
     }
 
-    self.Friction =
-      _input_force == 0.0 ? 0.8 * self.Default.Friction : self.Default.Friction;
-
     if (HandleStamina(_allow_stamina)) {
       _base_force *= self.SpeedMultiplier;
     }
+
+    self.Friction =
+      (_input_force == 0.0) ?
+      0.8 * self.Default.Friction :
+      self.Default.Friction;
+
 
     ApplyThrust(_base_force);
     ApplyBob(_bob_force);
@@ -231,41 +231,35 @@ class AaPlayer : DoomPlayer {
 
     ApplyThrust(_base_force);
     ApplyBob(_bob_force);
-    ScaleXYVelocity(self.WaterResistance);
+    ApplyXYVelScale(self.WaterResistance);
   }
 
   // Check the button state and apply jumping movement or lock the jumping
   // button.
   void HandleJumping() {
     if (self.Input.JumpButton.GetState()) {
-      if (self.Player.CrouchOffset != 0) {
-        self.Player.Crouching = 1;
-        return;
-      }
-
-      if (self.WaterLevel >= 2) {
-        self.Vel.Z = 4 * self.Speed;
-        return;
-      }
-
-      if (self.bNoGravity) {
-        self.Vel.Z = 3.0;
-        return;
-      }
-
-      if (
-        Level.IsJumpingAllowed() &&
-        self.AirTics <= JUMP_GRACE_TICS
-      ) {
-        self.JumpTics += 1;
-        self.Vel.Z += self.JumpZ / self.JumpTics;
-        self.bOnMobj = false;
-
-        if (!(self.Player.Cheats & CF_PREDICTING)) {
-          A_StartSound("*jump", CHAN_BODY);
-        }
-      } else if (self.JumpTics > 0) {
+      if (self.JumpTics == -1) {
         self.Input.JumpButton.Lock();
+        return;
+      }
+
+      if (self.AirTics > JUMP_GRACE_TICS && self.JumpTics == 0) {
+        self.Input.JumpButton.Lock();
+        return;
+      }
+
+      self.JumpTics += 1;
+      self.Vel.Z += self.JumpZ / self.JumpTics;
+      self.bOnMobj = false;
+
+      if (!(self.Player.Cheats & CF_PREDICTING)) {
+        A_StartSound("*jump", CHAN_BODY);
+      }
+    } else {
+      if (self.AirTics > JUMP_GRACE_TICS) {
+        self.JumpTics = -1;
+      } else {
+        self.JumpTics = 0;
       }
     }
   }
@@ -273,7 +267,6 @@ class AaPlayer : DoomPlayer {
   // Take from or the stamina amount if allowed or add to the stamina amount
   // and optionally lock the run button.
   bool HandleStamina(bool _allow) {
-    A_Log(""..self.StaminaAmount);
     if (_allow) {
       if (self.Input.SpeedButton.GetState()) {
         if (self.StaminaAmount > self.StaminaDecRate) {
@@ -312,6 +305,21 @@ class AaPlayer : DoomPlayer {
       self.Angle += self.Player.Cmd.Yaw * (360.0 / 65536.0);
     }
   }
+
+  // Determine if player is on the ground, swimming, or in the air.
+  void UpdateMoveState() {
+    if (self.Player.OnGround && !self.bNoGravity) {
+      self.MoveState = MOVE_GROUND;
+      return;
+    }
+    if (!self.WaterLevel) {
+      self.MoveState = MOVE_AIR;
+      return;
+    }
+    self.MoveState = MOVE_WATER;
+    return;
+  }
+  
 
   // Update player's `Player.OnGround` value. Logic adapted from `player.zs`.
   void UpdateOnGround() {
