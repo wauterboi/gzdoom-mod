@@ -1,0 +1,30 @@
+#include "./InputButton.zsc"
+#include "./InputAxis.zsc"
+
+// Struct representing input controls by including sub-structs for the strafe
+// axis, speed button, and jump button structs.
+struct AaInput {
+  // The strafe axis - typically the left thumbstick.
+  AaInputAxis StrafeAxis;
+
+  // The run button.
+  AaInputButton SpeedButton;
+
+  // The jump button.
+  AaInputButton JumpButton;
+
+  // Constructor.
+  void Init(AaPlayer _player) {
+    StrafeAxis.Init(_player);
+    SpeedButton.Init(_player, BT_SPEED);
+    JumpButton.Init(_player, BT_JUMP);
+  }
+
+  // Poll. This is called at the start of every call to `HandleMovement` and
+  // causes the structs to read applicable user input.
+  void Poll() {
+    StrafeAxis.Poll();
+    SpeedButton.Poll();
+    JumpButton.Poll();
+  }
+}

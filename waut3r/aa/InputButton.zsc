@@ -1,0 +1,57 @@
+// The current state of the button. If the button is `BUTTON_LOCKED`, then the
+// button will only change when the player releases the button.
+enum AaInputButtonState {
+  BUTTON_LOCKED,
+  BUTTON_UP,
+  BUTTON_DOWN
+}
+
+// A struct that temporarily "locks" a button from interaction. While locked the
+// button is treated as released until physically released, preventing repeated
+// activations (e.g., holding jump and accidentally triggering another jump on
+// landing).
+struct AaInputButton {
+  // The bitmask representing the button to be polled.
+  private int Mask;
+
+  // The player reference.
+  private AaPlayer Pawn;
+
+  // The current internal state. 
+  private AaInputButtonState State;
+
+  // Assign the bitmask, player pawn, and initial released state to the struct.
+  void Init(AaPlayer _player, int _mask) {
+    self.Mask = _mask;
+    self.Pawn = _player;
+    self.State = BUTTON_UP;
+  }
+
+  // Sets the current state to `BUTTON_LOCKED`, which will remain until the
+  // button is next read as `BUTTON_UP`.
+  void Lock() {
+    self.State = BUTTON_LOCKED;
+  }
+
+  // Read the button input and perform the state-switching logic.
+  void Poll() {
+    if (self.Pawn == NULL) {
+      return;
+    }
+
+    bool _raw = self.Pawn.Player.Cmd.Buttons & self.Mask;
+
+    if (!_raw) {
+      self.State = BUTTON_UP;
+    } else if (self.State != BUTTON_LOCKED) {
+      self.State = BUTTON_DOWN;
+    }
+  }
+
+  // Returns the effective state. `.GetState()` will return false if internal
+  // state is `BUTTON_UP` or `BUTTON_LOCKED`, and true if the internal state is
+  // `BUTTON_DOWN`.
+  bool GetState() {
+    return self.State == BUTTON_DOWN;
+  }
+}

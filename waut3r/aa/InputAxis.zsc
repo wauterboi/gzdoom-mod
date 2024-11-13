@@ -1,0 +1,40 @@
+// Struct representing the angle and position of the an input axis (i.e. left
+// thumb stick on a controller, or WASD)
+struct AaInputAxis {
+  // The angle of the current axis in relation to the origin.
+  private double Angle;
+
+  // The distance from the axis to the origin.
+  private double Magnitude;
+
+  // The associated player.
+  private AaPlayer Pawn;
+
+  // Constructor.
+  void Init(AaPlayer _player) {
+    self.Pawn = _player;
+    self.Angle = 0.0;
+    self.Magnitude = 0.0;
+  }
+
+  // Update the struct data by converting forward and side inputs into polar
+  // coordinates.
+  void Poll() {
+    if (self.Pawn == NULL) {
+      return;
+    }
+
+    let _cmd = self.Pawn.Player.Cmd;
+
+    double _x = _cmd.ForwardMove / (256.0);
+    double _y = _cmd.SideMove / (256.0);
+
+    self.Angle = VectorAngle(_x, -_y) + self.Pawn.Angle % 360;
+    self.Magnitude = Max(Abs(_x), Abs(_y));
+  }
+
+  // Get the magnitude and angle.
+  double, double GetState() {
+    return self.Magnitude, self.Angle;
+  }
+}

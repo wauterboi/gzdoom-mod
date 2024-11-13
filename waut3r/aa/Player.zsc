@@ -1,0 +1,357 @@
+#include "./Input.zsc"
+
+// TODO: Reimplement Up/Down movement
+
+// Duration of tics after leaving the ground in which a jump can be initiated.
+const JUMP_GRACE_TICS = 3;
+
+// Enum representing the player's movement state: swimming, airborne, or on the
+// ground. Refer to `.GetMoveState()` for specific criteria for each state.
+enum AaMoveState {
+  MOVE_WATER,
+  MOVE_AIR,
+  MOVE_GROUND
+}
+
+// Custom player class with reimplemented movement.
+class AaPlayer : DoomPlayer {
+  // Multiplier on strafe force while in the air.
+  double AirControl;
+  property AirControl: AirControl;
+
+  // Multiplier on XY velocity while in the air.
+  double AirResistance;
+  property AirResistance: AirResistance;
+
+  // Multiplier on strafe force while running.
+  double SpeedMultiplier;
+  property SpeedMultiplier: SpeedMultiplier;
+
+  // Stamina deduction per tic while running.
+  int StaminaDecRate;
+  property StaminaDecRate: StaminaDecRate;
+
+  // Stamina gain per tic while running.
+  int StaminaIncRate;
+  property StaminaIncRate: StaminaIncRate;
+
+  // Initial amount and cap for stamina.
+  double StaminaMax;
+  property StaminaMax: StaminaMax;
+
+  // Multiplier on strafe force while in the water.
+  double WaterControl;
+  property WaterControl: WaterControl;
+
+  // Multiplier on XY velocity while in the water.
+  double WaterResistance;
+  property WaterResistance: WaterResistance;
+
+  // Number of tics spent in air. Zero means the player is on the ground.
+  int AirTics;
+
+  // Struct containing structs representing the run button, jump buttons, and
+  // strafe axis (left thumbstick/WASD keys)
+  AaInput Input;
+
+  // Number of tics spent jumping. Because of the jumping grace period, this is
+  // not necessarily in sync with `AirTics`.
+  int JumpTics;
+
+  // Current amount of stamina.
+  int StaminaAmount;
+
+  //
+  AaMoveState State;
+
+  default {
+    Speed 20.0;
+    Friction 1.0;
+    AaPlayer.AirControl 0.75;
+    AaPlayer.AirResistance 0.9;
+    AaPlayer.SpeedMultiplier 2.0;
+    AaPlayer.StaminaMax TICRATE;
+    AaPlayer.StaminaDecRate 1;
+    AaPlayer.StaminaIncRate 2;
+    AaPlayer.WaterControl 0.75;
+    AaPlayer.WaterResistance 0.8;
+    Player.JumpZ 5.0;
+  }
+
+  // Called before the first call to tick. Overidden to initialize values.
+  override void PostBeginPlay() {
+    Super.PostBeginPlay();
+    Input.Init(self);
+    self.StaminaAmount = self.StaminaMax;
+    self.AirTics = 0;
+    self.JumpTics = 0;
+  }
+
+  // Handles movement logic per tick.
+  override void HandleMovement() {
+    self.Input.Poll();
+
+    // Adapted functionality from `player.zs`.
+    self.UpdateAngle();
+    self.UpdateTurnTicks();
+    self.UpdateOnGround();
+
+    // If frozen...
+    if (self.ReactionTime) {
+      self.ReactionTime--;
+      self.HandleStamina(false);
+      return;
+    }
+
+    // Heavily modified and reimplemented logic for strafing and jumping.
+    self.HandleStrafing();
+    self.HandleJumping();
+  }
+
+  // Apply bobbing to current weapon.
+  void ApplyBob(double _bob_force) {
+    UserCmd cmd = self.Player.Cmd;
+    double _forward_move = cmd.ForwardMove;
+    double _side_move = cmd.SideMove;
+
+    if (_forward_move) {
+      self.Bob(self.Angle, _forward_move * _bob_force / 256.0, true);
+    }
+
+    if (_side_move) {
+      self.Bob(self.Angle - 90, _side_move * _bob_force / 256.0, false);
+    }
+  }
+
+  // Move player based on strafe axis, player speeds, and given base force
+  // scale.
+  void ApplyThrust(double _base_force) {
+    double _input_force, _input_angle;
+    [_input_force, _input_angle] = self.Input.StrafeAxis.GetState();
+
+    double _strafe_force = _input_force * _base_force * self.Speed;
+
+    Thrust(_strafe_force, _input_angle);
+  }
+
+  // Multiply XY velocity by given scalar.
+  void ApplyXYVelScale(double _scale) {
+    Vel.X *= _scale;
+    Vel.Y *= _scale;
+  }
+
+  // Get the base strafing force and bobbing force taking into account friction.
+  double, double GetBaseStrafeForces() {
+    double _bob_force, _friction, _base_force;
+
+    [_friction, _base_force] = self.GetFriction();
+    _bob_force =
+      (_friction < ORIG_FRICTION) ? _base_force : ORIG_FRICTION_FACTOR;
+
+    return _base_force, _bob_force;
+  }
+
+  // Determine if player is on the ground, swimming, or in the air.
+  AaMoveState GetMoveState() {
+    if (self.Player.OnGround && !self.bNoGravity) {
+      return MOVE_GROUND;
+    }
+    if (!self.WaterLevel) {
+      return MOVE_AIR;
+    }
+    return MOVE_WATER;
+  }
+
+  // Calculate and apply movement based on the player's movement state.
+  void HandleStrafing() {
+    AaMoveState _move_state = self.GetMoveState();
+
+    double _base_force, _bob_force;
+    [_base_force, _bob_force] = self.GetBaseStrafeForces();
+
+    switch (_move_state) {
+      case(MOVE_WATER):
+        HandleWaterStrafing(_base_force, _bob_force);
+        break;
+      case(MOVE_GROUND):
+        HandleGroundStrafing(_base_force, _bob_force);
+        break;
+      case(MOVE_AIR):
+        HandleAirStrafing(_base_force, _bob_force);
+        break;
+    }
+  }
+
+  // Calculate and apply airborne strafing movement.
+  void HandleAirStrafing(double _base_force, double _bob_force) {
+    _base_force *= self.AirControl;
+    _bob_force *= self.AirControl;
+
+    HandleStamina(false);
+
+    ApplyThrust(_base_force);
+    ApplyBob(_bob_force);
+    ApplyXYVelScale(self.AirResistance);
+  }
+
+  // Calculate and apply grounded strafing movement.
+  void HandleGroundStrafing(double _base_force, double _bob_force) {
+    bool _allow_stamina = true;
+
+    if (self.CanCrouch() && self.Player.CrouchFactor != 1) {
+      _base_force *= self.Player.CrouchFactor;
+      _bob_force *= self.Player.CrouchFactor;
+      _allow_stamina = false;
+    }
+
+    double _input_force, _input_angle;
+    [_input_force, _input_angle] = self.Input.StrafeAxis.GetState();
+
+    if (_input_force < 0.5 || Abs(_input_angle - self.Angle % 360.0) > 50.0) {
+      _allow_stamina = false;
+    }
+
+    self.Friction =
+      _input_force == 0.0 ? 0.8 * self.Default.Friction : self.Default.Friction;
+
+    if (HandleStamina(_allow_stamina)) {
+      _base_force *= self.SpeedMultiplier;
+    }
+
+    ApplyThrust(_base_force);
+    ApplyBob(_bob_force);
+  }
+
+  // Calculate and apply water-based strafing movement.
+  void HandleWaterStrafing(double _base_force, double _bob_force) {
+    _base_force *= self.WaterControl;
+    _bob_force *= self.WaterControl;
+
+    HandleStamina(false);
+
+    ApplyThrust(_base_force);
+    ApplyBob(_bob_force);
+    ScaleXYVelocity(self.WaterResistance);
+  }
+
+  // Check the button state and apply jumping movement or lock the jumping
+  // button.
+  void HandleJumping() {
+    if (self.Input.JumpButton.GetState()) {
+      if (self.Player.CrouchOffset != 0) {
+        self.Player.Crouching = 1;
+        return;
+      }
+
+      if (self.WaterLevel >= 2) {
+        self.Vel.Z = 4 * self.Speed;
+        return;
+      }
+
+      if (self.bNoGravity) {
+        self.Vel.Z = 3.0;
+        return;
+      }
+
+      if (
+        Level.IsJumpingAllowed() &&
+        self.AirTics <= JUMP_GRACE_TICS
+      ) {
+        self.JumpTics += 1;
+        self.Vel.Z += self.JumpZ / self.JumpTics;
+        self.bOnMobj = false;
+
+        if (!(self.Player.Cheats & CF_PREDICTING)) {
+          A_StartSound("*jump", CHAN_BODY);
+        }
+      } else if (self.JumpTics > 0) {
+        self.Input.JumpButton.Lock();
+      }
+    }
+  }
+
+  // Take from or the stamina amount if allowed or add to the stamina amount
+  // and optionally lock the run button.
+  bool HandleStamina(bool _allow) {
+    A_Log(""..self.StaminaAmount);
+    if (_allow) {
+      if (self.Input.SpeedButton.GetState()) {
+        if (self.StaminaAmount > self.StaminaDecRate) {
+          self.StaminaAmount -= self.StaminaDecRate;
+          return true;
+        } else {
+          self.StaminaAmount = Min(
+            self.StaminaAmount + self.StaminaIncRate,
+            self.StaminaMax
+          );
+          self.Input.SpeedButton.Lock();
+          return false;
+        }
+      } else {
+        self.StaminaAmount = Min(
+          self.StaminaAmount + self.StaminaIncRate,
+          self.StaminaMax
+        );
+        return false;
+      }
+    } else {
+      self.StaminaAmount = Min(
+        self.StaminaAmount + self.StaminaIncRate,
+        self.StaminaMax
+      );
+      return false;
+    }
+  }
+
+  // Update angle. Logic adapted from `player.zs`.
+  void UpdateAngle() {
+    if (self.Player.TurnTicks) {
+      self.Player.TurnTicks--;
+      self.Angle += 180.0 / TURN180_TICKS;
+    } else {
+      self.Angle += self.Player.Cmd.Yaw * (360.0 / 65536.0);
+    }
+  }
+
+  // Update player's `Player.OnGround` value. Logic adapted from `player.zs`.
+  void UpdateOnGround() {
+    self.Player.OnGround =
+      (self.Pos.Z <= self.FloorZ) ||
+      (self.bOnMobj) ||
+      (self.bMBFBouncer) ||
+      (self.Player.Cheats & CF_NOCLIP2);
+
+    if (self.Player.OnGround == false) {
+      self.AirTics = self.AirTics + 1;
+    } else {
+      if (self.JumpTics > 0) {
+        self.Input.JumpButton.Lock();
+      }
+      self.AirTics = 0;
+      self.JumpTics = 0;
+    }
+  }
+
+  // Update player's running animation. Logic adapted from `player.zs`.
+  void UpdateSeeState() {
+    if (
+      !(self.Player.Cheats & CF_PREDICTING) &&
+      (
+        (self.Player.Cmd.ForwardMove != 0) ||
+        (self.Player.Cmd.SideMove != 0)
+      )
+    ) {
+      self.PlayRunning();
+    }
+  }
+
+  // Update the "fast turn" state on the player. Logic adapted from `player.zs`.
+  void UpdateTurnTicks() {
+    if (
+      (self.Player.Cmd.Buttons & BT_TURN180) &&
+      !(Player.OldButtons & BT_TURN180)
+    ) {
+      Player.TurnTicks = TURN180_TICKS;
+    }
+  }
+}
