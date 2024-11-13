@@ -1,6 +1,7 @@
 #include "./Input.zsc"
 
 // TODO: Reimplement Up/Down movement
+// TODO: Reimplement Crouch check in jumping
 
 // Duration of tics after leaving the ground in which a jump can be initiated.
 const JUMP_GRACE_TICS = 3;
@@ -116,23 +117,6 @@ class AaPlayer : DoomPlayer {
     self.HandleJumping();
   }
 
-  // Apply bobbing to camera and weapon.
-  void ApplyBob(double _bob_force) {
-    UserCmd cmd = self.Player.Cmd;
-    double _forward_move = cmd.ForwardMove;
-    double _side_move = cmd.SideMove;
-
-    _bob_force *= 1.0 / (self.AirTics + 1.0) ** 2.0;
-
-    // if (_forward_move) {
-    //   self.Bob(self.Angle, _forward_move * _bob_force / 256.0, true);
-    // }
-
-    // if (_side_move) {
-    //   self.Bob(self.Angle - 90, _side_move * _bob_force / 256.0, false);
-    // }
-  }
-
   // Move player based on strafe axis, player speeds, and given base force
   // scale.
   void ApplyThrust(double _base_force) {
@@ -187,7 +171,6 @@ class AaPlayer : DoomPlayer {
     HandleStamina(false);
 
     ApplyThrust(_base_force);
-    ApplyBob(_bob_force);
     ApplyXYVelScale(self.AirResistance);
   }
 
@@ -219,7 +202,6 @@ class AaPlayer : DoomPlayer {
 
 
     ApplyThrust(_base_force);
-    ApplyBob(_bob_force);
   }
 
   // Calculate and apply water-based strafing movement.
@@ -230,7 +212,6 @@ class AaPlayer : DoomPlayer {
     HandleStamina(false);
 
     ApplyThrust(_base_force);
-    ApplyBob(_bob_force);
     ApplyXYVelScale(self.WaterResistance);
   }
 
