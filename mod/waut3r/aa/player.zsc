@@ -1,0 +1,360 @@
+/**
+  * Custom player class for ZDoom.
+  *
+  * Very minimal measures are taken to ensure mod compatbility and network
+  * safety. This may change in the future, but both my current understanding and
+  * the existing documentation for ZScript, ZDoom, and networking is limited.
+  * Critique is welcome.
+  */
+class AaPlayer : DoomPlayer;
+
+/**
+  * A grace period for initiating the first jump after leaving the ground.
+  */
+const JUMP_GRACE_TICS = 3;
+
+/**
+  * The current internal button state for `AaInputButton`.
+  */
+enum AaInputButtonState {
+  BUTTON_LOCKED,
+  BUTTON_UP,
+  BUTTON_DOWN
+}
+
+/**
+  * Structure representing the current state of a player button, which can be
+  * up, down, and "locked".
+  *
+  * Internally, this structure polls the `Buttons` bitfield from the player's
+  * `UserCmd` structure and checks it against the internal state. If the
+  * internal state is `AaPlayer.BUTTON_UP` or `AaPlayer.BUTTON_DOWN`, the button
+  * state is read and stored normally. If the internal state is
+  * `AaPlayer.BUTTON_LOCKED`, then the button state will only update if the
+  * player releases the button, in which the state will become
+  * `AaPlayer.BUTTON_UP`.
+  *
+  * This is useful for ignoring requested actions when they would be invalid,
+  * like continuing to hold the jump button after landing, or continuing to hold
+  * the run button after all stamina has been depleted.
+  *
+  * `Poll` is expected to be called once per tic before use.
+  */
+struct AaInputButton {
+
+  /**
+    * Reference to the associated player class instance.
+    */
+  private AaPlayer Pawn;
+
+  /**
+    * Internal button state.
+    */
+  private .AaPlayer.AaInputButtonState State;
+
+  /**
+    * Bitmask for calculating button state from player's `UserCmd.Buttons`
+    * bitfield
+    */
+  private int Mask;
+
+  /**
+    * Constructor. Store a reference to the player class instance and the
+    * bitmask representing the button.
+    */
+  void Init(AaPlayer _pawn, int _mask) {
+    self.Pawn = _pawn;
+    self.Mask = _mask;
+  }
+
+  /**
+    * Get button state. `true` means the button was in the
+    * `AaPlayer.BUTTON_DOWN` state, while `false` means the button could have
+    * been `AaPlayer.BUTTON_UP` or `AaPlayer.BUTTON_LOCKED` state.
+    */
+  bool Get() {
+    return self.State == AaPlayer.BUTTON_LOCKED;
+  }
+
+  /**
+    * Override the current state to `AaPlayer.BUTTON_LOCKED`. This state
+    * will not update afterwards unless `Poll` detects that the player has
+    * released the button, in which it will change to `AaPlayer.BUTTON_UP`.
+    */
+  void Lock() {
+    self.State = AaPlayer.BUTTON_LOCKED;
+  }
+
+  /**
+    * Update the internal button state. If the current state is
+    * `AaPlayer.BUTTON_LOCKED`, then it will only update if the button is
+    * released, in which it will change to `AaPlayer.BUTTON_UP`.
+    */
+  void Poll() {
+    if (self.Pawn == NULL) {
+      return;
+    }
+
+    bool _raw = self.Pawn.Player.Cmd.Buttons & self.Mask;
+
+    if (!_raw) {
+      self.State = AaPlayer.BUTTON_UP;
+    } else if (self.State != AaPlayer.BUTTON_LOCKED) {
+      self.State = AaPlayer.BUTTON_DOWN;
+    }
+  }
+}
+
+/**
+  * Structure representing the strafe input axis for the player.
+  *
+  * Internally, the structure reads `ForwardMove` and `SideMove` from the
+  * player's `UserCmd` structure to determine the intended angle and magnitude
+  * of the player.
+  * 
+  * Doom's forward/side scaling is removed from `ForwardMove` and `SideMove`
+  * before they are normalized and mapped proportionally to polar coordinates
+  * represented by `.Angle` and `.Magnitude`.
+  *
+  * `Poll` is expected to be called once per tic before use.
+  */
+struct AaInputStrafeAxis {
+
+  /**
+    * Reference to the associated player class instance.
+    */
+  private AaPlayer Pawn;
+
+  /**
+    * The current angle of the player's strafe input axis.
+    */
+  private double Angle;
+
+  /**
+    * The current magnitude of the player's strafe input axis. (In laymen's
+    * terms, how far the thumb stick is moved from the center.)
+    */
+  private double Magnitude;
+
+  /**
+    * Constructor. Stores a reference to the player class instance.
+    */
+  void Init(AaPlayer _pawn) {
+    self.Pawn = _pawn;
+  }
+
+  /**
+    * Return the magnitude and angle.
+    */
+  double, double Get() {
+    return self.Magnitude, self.Angle;
+  }
+
+  /**
+    * Convert `ForwardMove` and `SideMove` into normalized, proportional
+    * polar coordinates represented by `.Angle` and `.Magnitude`.
+    */
+  void Poll() {
+    let _cmd = self.Pawn.Player.Cmd;
+
+    // `NormForwardMove` and `NormSideMove` both store the walking speed
+    // at 0 and running speed at 1.
+    let _index = (_cmd.Buttons & BT_SPEED) ? 1 : 0;
+
+    // Get rid of the traditional scaling and normalize in one go. Since
+    // `ForwardMove` and `SideMove` are fixed 16-bit integers, we scale the
+    // GameInfo values by 256.0 to produce our proportionally sized denominator.
+    let _normalized_x =
+      _cmd.ForwardMove / (GameInfo.NormForwardMove[_index] * 256.0);
+    let _normalized_y =
+      _cmd.SideMove / (GameInfo.NormSideMove[_index] * 256.0);
+
+    // Mapping the XY values to maintain proportions and preserve magnitude
+    let _scaled_x = _normalized_x * Sqrt(1.0 - (_normalized_y ** 2.0) / 2.0);
+    let _scaled_y = _normalized_y * Sqrt(1.0 - (_normalized_x ** 2.0) / 2.0);
+
+    // Convert to angle and magnitude
+    self.Angle = VectorAngle(_scaled_x, _scaled_y);
+    self.Magnitude = Sqrt(_scaled_x ** 2 + _scaled_y ** 2);
+  }
+
+  /**
+    * Convenience function that forces the input forward with maximum force.
+    *
+    * This is intended for use in a reimplementation of the chainsaw.
+    */
+  void SetMaxForward() {
+    self.Angle = 0.0;
+    self.Magnitude = 1.0;
+  }
+}
+
+/**
+  * Structure for managing strafe axis, jump button, and run button data
+  * represented in specialized structure members.
+  *
+  * `Poll` is expected to be called once per tic before use.
+  */
+struct AaInput {
+  /**
+    * Struct to manage and represent the state of the jump button.
+    */
+  .AaPlayer.AaInputButton JumpButton;
+
+  /**
+    * Struct to manage and represent the state of the speed/run button.
+    */
+  .AaPlayer.AaInputButton SpeedButton;
+
+  /**
+    * Struct that interprets `ForwardMove` and `SideMove` as polar coordinates.
+    */
+  .AaPlayer.AaInputStrafeAxis StrafeAxis;
+
+  /**
+    * Reference to the associated player class instance.
+    */
+  AaPlayer Pawn;
+
+  /**
+    * Constructor. Stores reference to player class instance, then calls
+    * constructors for all struct members.
+    */
+  void Init(AaPlayer _pawn) {
+    self.Pawn = _pawn;
+    self.StrafeAxis.Init(_pawn);
+    self.JumpButton.Init(_pawn, BT_JUMP);
+    self.SpeedButton.Init(_pawn, BT_SPEED);
+  }
+
+  /**
+    * Safely triggers each struct member to update their states.
+    */
+  void Poll() {
+    if (!self.Pawn) {
+      return;
+    }
+
+    self.StrafeAxis.Poll();
+    self.JumpButton.Poll();
+    self.SpeedButton.Poll();
+  }
+}
+
+// See above
+.AaPlayer.AaInput Input;
+
+/**
+  * The current conditions for player movement.
+  */
+enum AaMoveState {
+  AA_MOVE_AIRBORNE,
+  AA_MOVE_SWIMMING,
+  AA_MOVE_STEPPING
+}
+
+// See above
+.AaPlayer.AaMoveState MoveState;
+
+/**
+  * This multiplier is applied to the strafing force (the added force from the
+  * player's attempt to move) while the player is in the air.
+  */
+double AirStrafeMult;
+property AirStrafeMult: AirStrafeMult;
+
+/**
+  * This multiplier is applied to the strafing force (the added force from the
+  * player's attempt to move) while the player is crouching..
+  */
+double CrouchStrafeMult;
+property CrouchStrafeMult: CrouchStrafeMult;
+
+/**
+  * This multiplier is applied to the strafing force (the added force from the
+  * player's attempt to move) while the player is running.
+  */
+double SpeedStrafeMult;
+property SpeedStrafeMult: SpeedStrafeMult;
+
+/**
+  * This multiplier is applied to the strafing force (the added force from the
+  * player's attempt to move) while the player is swimming.
+  */
+double WaterStrafeMult;
+property WaterStrafeMult: WaterStrafeMult;
+
+/**
+  * This scales the player's entire velocity while underwater.
+  */
+double WaterResistance;
+property WaterResistance: WaterResistance;
+
+/**
+  * The current amount of stamina.
+  */
+int CurrentStamina;
+
+/**
+  * The maximum amount of stamina.
+  */
+double MaxStamina;
+property MaxStamina: MaxStamina;
+
+/**
+  * The amount of stamina to remove each tic while running.
+  */
+double StaminaDecRate;
+property StaminaDecRate: StaminaDecRate;
+
+/**
+  * The amount of stamina to add each tic while not running.
+  */
+double StaminaIncRate;
+property StaminaIncRate: StaminaIncRate;
+
+/**
+  * The number of tics the player has been in the air.
+  */
+int AirTics;
+
+/**
+  * The current number of jumps the player has initiated since being on the
+  * ground. If the player is in the air for longer than `JUMP_GRACE_TICS` and
+  * hasn't initiated a jump, this variable will automatically increase by one,
+  * effectively temporarily decreasing the maximum number of jumps by one.
+  */
+int JumpCount;
+
+/**
+  * The number of tics a player has spent holding the jump button while it is
+  * valid to do so. If zero, the player is either not trying to initiate a jump,
+  * or is continuing to hold the jump button after landing.
+  */
+int JumpTics;
+
+/**
+  * The maximum number of jumps a player can make before they must land.
+  */
+int MaxJumps;
+
+default {
+  Gravity 0.8;
+  Speed 0.6;
+  Friction 1.0;
+
+  AaPlayer.AirStrafeMult 0.5;
+  AaPlayer.CrouchStrafeMult 0.5;
+  AaPlayer.SpeedStrafeMult 2.0;
+  AaPlayer.WaterStrafeMult 0.75;
+  
+  AaPlayer.WaterResistance 0.75;
+
+  AaPlayer.StaminaDecRate 1;
+  AaPlayer.StaminaIncRate 2;
+  AaPlayer.MaxStamina TICRATE * 1.0;
+
+  Player.JumpZ 2.5;
+  Player.ViewBobSpeed 2.0;
+  Player.ViewBob 0.25;
+}
