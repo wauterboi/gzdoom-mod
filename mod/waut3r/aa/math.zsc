@@ -1,0 +1,5 @@
+class AaMath abstract {
+  static clearscope double Lerp(double a, double b, double frac) {
+    return a * frac + b * (1 - frac);
+  }
+}

@@ -358,3 +358,61 @@ default {
   Player.ViewBobSpeed 2.0;
   Player.ViewBob 0.25;
 }
+
+void ApplyXYVelScale(double _scale) {
+}
+
+/**
+  * Calls the `PostBeginPlay` method of the parent class, initialize our Input
+  * struct, and set our stamina to the maximum.
+  */
+override void PostBeginPlay() {
+  Super.PostBeginPlay();
+  self.Input.Init(self);
+  self.CurrentStamina = self.MaxStamina;
+}
+
+override void PlayerThink() {
+}
+
+virtual void AliveThink() {
+}
+
+virtual void HandleAngle() {
+}
+
+virtual void HandlePitch() {
+}
+
+virtual void HandleQuickTurning() {
+}
+
+virtual void HandleOnGround() {
+}
+
+virtual void HandleMoveState() {
+}
+
+virtual bool HandleFrozenMovement() {
+}
+
+virtual void HandleStrafeMovement(double _input_force, double _input_angle) {
+}
+
+virtual void HandleAirStrafing(double _input_force, double _input_angle) {
+}
+
+virtual void HandleGroundStrafing(double _input_force, double _input_angle) {
+}
+
+virtual void HandleWaterStrafing(double _input_force, double _input_angle) {
+}
+
+virtual void HandleJumpMovement(double _input_force, double _input_angle) {
+}
+
+virtual bool HandleStamina(bool _allow) {
+}
+
+virtual void HandlePlayerFlashing() {
+}
