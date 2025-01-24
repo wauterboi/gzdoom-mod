@@ -5,6 +5,9 @@
   * safety. This may change in the future, but both my current understanding and
   * the existing documentation for ZScript, ZDoom, and networking is limited.
   * Critique is welcome.
+  *
+  * Much of the code simply reorganizes existing code into multiple methods to
+  * counter the monolithic nature of the built-in player movement code.
   */
 class AaPlayer : DoomPlayer;
 
@@ -363,7 +366,7 @@ void ApplyXYVelScale(double _scale) {
 }
 
 /**
-  * Calls the `PostBeginPlay` method of the parent class, initialize our Input
+  * Calls the `PostBeginPlay` method of the parent class, initializes our Input
   * struct, and set our stamina to the maximum.
   */
 override void PostBeginPlay() {
@@ -372,47 +375,115 @@ override void PostBeginPlay() {
   self.CurrentStamina = self.MaxStamina;
 }
 
+/**
+  * Complete rework of the `PlayerThink` method which separates and reimplements
+  * functionality into multiple different methods.
+  *
+  * The `PlayerThink` method from the parent is never called.
+  */
 override void PlayerThink() {
 }
 
+/**
+  * Runs all methods that must be called per tick if the player is alive.
+  */
 virtual void AliveThink() {
 }
 
+/**
+  * Handles all updates related to player angle.
+  */
 virtual void HandleAngle() {
 }
 
+/**
+  * Updates pitch.
+  */
 virtual void HandlePitch() {
 }
 
+/**
+  * Runs logic required for quick turning
+  */
 virtual void HandleQuickTurning() {
 }
 
+/**
+  * Determines if the player is on ground and performs conditional updates.
+  */
 virtual void HandleOnGround() {
 }
 
+/**
+  * Determines the general movement conditions of the player.
+  */
 virtual void HandleMoveState() {
 }
 
+/**
+  * Determines if the player is frozen and runs restricted movement code if
+  * true.
+  */
 virtual bool HandleFrozenMovement() {
 }
 
+/**
+  * Calls special strafing method depending on player's `MoveState`.
+  */
 virtual void HandleStrafeMovement(double _input_force, double _input_angle) {
 }
 
+/**
+  * Applies air-specific strafe movement.
+  *
+  * Running is not possible.
+  */
 virtual void HandleAirStrafing(double _input_force, double _input_angle) {
 }
 
+/**
+  * Applies ground-specific strafe movement.
+  *
+  * Takes into account running and crouching.
+  */
 virtual void HandleGroundStrafing(double _input_force, double _input_angle) {
 }
 
+/**
+  * Applies water-specific strafe movement.
+  *
+  * Running is not possible within this method.
+  */
 virtual void HandleWaterStrafing(double _input_force, double _input_angle) {
 }
 
+/**
+  * Handles jumping.
+  *
+  * Coyote jumping is implemented such that if the player is in the air
+  * for less than `JUMP_GRACE_TICS`, the player is still able to jump. If after
+  * these tics the player is still in the air but has not initiated a jump,
+  * the game will automatically increment `JumpCount` to effectively deduct
+  * from the allowed jumps.
+  *
+  * For jumps made after `JUMP_GRACE_TICS`, a boost will be applied in the
+  * strafe movement direction.
+  */
 virtual void HandleJumpMovement(double _input_force, double _input_angle) {
 }
 
+/**
+  * Routine for using and regenerating stamina.
+  *
+  * Returns `true` if stamina was used and `false` otherwise.
+  */
 virtual bool HandleStamina(bool _allow) {
 }
 
+/**
+  * Handles all screen flashing effects.
+  *
+  * This is intended to be called without prediction.
+  */
 virtual void HandlePlayerFlashing() {
 }
