@@ -10,7 +10,6 @@
   * counter the monolithic nature of the built-in player movement code.
   *
   * TODO:
-  * - Reimplement crouching
   * - Reimplement viewbob
   */
 class AaPlayer : DoomPlayer;
@@ -355,12 +354,12 @@ default {
   Friction 1.0;
 
   AaPlayer.AirStrafeMult 0.75;
-  AaPlayer.CrouchStrafeMult 0.25;
+  AaPlayer.CrouchStrafeMult 0.5;
   AaPlayer.SpeedStrafeMult 2.0;
-  AaPlayer.WaterStrafeMult 0.25;
+  AaPlayer.WaterStrafeMult 0.5;
   
   AaPlayer.AirResistance 0.9;
-  AaPlayer.WaterResistance 0.75;
+  AaPlayer.WaterResistance 0.8;
 
   AaPlayer.StaminaDecRate 1;
   AaPlayer.StaminaIncRate 2;
@@ -455,6 +454,7 @@ virtual void AliveThink() {
   self.HandleAngle();
 
   if (self.HandleFrozenMovement()) {
+    self.CheckCrouch(true);
     self.HandleStamina(false);
     return;
   }
@@ -462,6 +462,7 @@ virtual void AliveThink() {
   double _input_force, _input_angle;
   [_input_force, _input_angle] = self.Input.StrafeAxis.Get();
 
+  self.CheckCrouch(false);
   self.HandleStrafeMovement(_input_force, _input_angle);
   self.HandleJumpMovement(_input_force, _input_angle);
   self.HandleViewBob();
@@ -796,5 +797,5 @@ virtual void HandlePlayerFlashing() {
   * TODO: Probably remove and replace with a custom BobWeapon?
   */
 virtual void HandleViewBob() {
-  self.Player.ViewZ = self.Pos.Z + self.ViewHeight;
+  self.Player.ViewZ = self.Pos.Z + self.ViewHeight + self.Player.CrouchOffset;
 }
