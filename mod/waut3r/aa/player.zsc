@@ -8,6 +8,10 @@
   *
   * Much of the code simply reorganizes existing code into multiple methods to
   * counter the monolithic nature of the built-in player movement code.
+  *
+  * TODO:
+  * - Reimplement crouching
+  * - Reimplement viewbob
   */
 class AaPlayer : DoomPlayer;
 
@@ -76,7 +80,7 @@ struct AaInputButton {
     * been `AaPlayer.BUTTON_UP` or `AaPlayer.BUTTON_LOCKED` state.
     */
   bool Get() {
-    return self.State == AaPlayer.BUTTON_LOCKED;
+    return self.State == AaPlayer.BUTTON_DOWN;
   }
 
   /**
@@ -94,10 +98,6 @@ struct AaInputButton {
     * released, in which it will change to `AaPlayer.BUTTON_UP`.
     */
   void Poll() {
-    if (self.Pawn == NULL) {
-      return;
-    }
-
     bool _raw = self.Pawn.Player.Cmd.Buttons & self.Mask;
 
     if (!_raw) {
@@ -234,6 +234,7 @@ struct AaInput {
     * Safely triggers each struct member to update their states.
     */
   void Poll() {
+    // Sanity check - don't bother if the player is not fully initialized
     if (!self.Pawn) {
       return;
     }
@@ -288,6 +289,12 @@ double WaterStrafeMult;
 property WaterStrafeMult: WaterStrafeMult;
 
 /**
+  * This scales the player's entire velocity while in the air.
+  */
+double AirResistance;
+property AirResistance: AirResistance;
+
+/**
   * This scales the player's entire velocity while underwater.
   */
 double WaterResistance;
@@ -340,22 +347,26 @@ int JumpTics;
   * The maximum number of jumps a player can make before they must land.
   */
 int MaxJumps;
+property MaxJumps: MaxJumps;
 
 default {
   Gravity 0.8;
   Speed 0.6;
   Friction 1.0;
 
-  AaPlayer.AirStrafeMult 0.5;
-  AaPlayer.CrouchStrafeMult 0.5;
+  AaPlayer.AirStrafeMult 0.75;
+  AaPlayer.CrouchStrafeMult 0.25;
   AaPlayer.SpeedStrafeMult 2.0;
-  AaPlayer.WaterStrafeMult 0.75;
+  AaPlayer.WaterStrafeMult 0.25;
   
+  AaPlayer.AirResistance 0.9;
   AaPlayer.WaterResistance 0.75;
 
   AaPlayer.StaminaDecRate 1;
   AaPlayer.StaminaIncRate 2;
   AaPlayer.MaxStamina TICRATE * 1.0;
+
+  AaPlayer.MaxJumps 2;
 
   Player.JumpZ 2.5;
   Player.ViewBobSpeed 2.0;
@@ -363,6 +374,8 @@ default {
 }
 
 void ApplyXYVelScale(double _scale) {
+  self.Vel.X *= _scale;
+  self.Vel.Y *= _scale;
 }
 
 /**
@@ -382,42 +395,162 @@ override void PostBeginPlay() {
   * The `PlayerThink` method from the parent is never called.
   */
 override void PlayerThink() {
+  let _player = self.Player;
+
+  self.Input.Poll();
+  self.HandleCheats();
+  self.HandleOnGround();
+  self.HandleMoveState();
+  self.CheckFOV();
+
+  if (_player.InventoryTics) {
+    _player.InventoryTics--;
+  }
+
+  if (_player.PlayerState == PST_DEAD) {
+    self.DeathThink();
+  } else {
+    self.AliveThink();
+  }
+
+  if (!(_player.Cheats & CF_PREDICTING)) {
+    self.HandlePlayerFlashing();
+    self.CheckPoison();
+    self.CheckDegeneration();
+    self.CheckAirSupply();
+  }
+
+  self.TickPSprites();
+}
+
+/**
+  * Handle cheat flags/movement
+  */
+virtual void HandleCheats() {
+  let _player = self.Player;
+  let _noclip = _player.Cheats & (CF_NOCLIP | CF_NOCLIP2);
+  
+  // The base noclip flag is required when noclipping
+  if (_noclip == CF_NOCLIP2) {
+    _player.Cheats &= ~CF_NOCLIP2;
+  }
+  
+  // Ensure noclip actor flag is enabled if any noclip cheat flag is enabled
+  self.bNoClip = self.Player.Cheats & _noclip || Default.bNoClip;
+  
+  // Disable gravity when applicable
+  self.bNoGravity =
+  // Player normally doesn't have gravity
+  self.Default.bNoGravity ||
+  // Player is flying
+  self.bFly ||
+  // Noclip cheat enabled (mode 2)
+  (_player.Cheats & CF_NOCLIP2);
 }
 
 /**
   * Runs all methods that must be called per tick if the player is alive.
   */
 virtual void AliveThink() {
+  self.HandleAngle();
+
+  if (self.HandleFrozenMovement()) {
+    self.HandleStamina(false);
+    return;
+  }
+
+  double _input_force, _input_angle;
+  [_input_force, _input_angle] = self.Input.StrafeAxis.Get();
+
+  self.HandleStrafeMovement(_input_force, _input_angle);
+  self.HandleJumpMovement(_input_force, _input_angle);
+  self.HandleViewBob();
 }
 
 /**
   * Handles all updates related to player angle.
   */
 virtual void HandleAngle() {
+  self.HandleQuickTurning();
+  self.HandlePitch();
 }
 
 /**
   * Updates pitch.
   */
 virtual void HandlePitch() {
+  let _player = self.Player;
+
+  if (!Level.IsFreelookAllowed()) {
+    self.Pitch = 0.0;
+  } else {
+    int _pitch = _player.Cmd.Pitch;
+    
+    if (_pitch == -32768) {
+      _player.Centering = true;
+    } else if (!_player.Centering) {
+      self.Pitch = Clamp(
+        self.Pitch - _pitch * (360.0 / 65536.0),
+        _player.MinPitch,
+        _player.MaxPitch
+      );
+    }
+  }
 }
 
 /**
   * Runs logic required for quick turning
   */
 virtual void HandleQuickTurning() {
+  let _player = self.Player;
+
+  if (_player.TurnTicks && _player.TurnTicks > 0) {
+    _player.TurnTicks--;
+    self.Angle += 180.0 / TURN180_TICKS;
+  } else {
+    self.Angle += _player.Cmd.Yaw * (360.0 / 65536.0);
+  }
+  
+  if (
+    (_player.Cmd.Buttons & BT_TURN180) &&
+    !(_player.OldButtons & BT_TURN180)
+  ) {
+    _player.TurnTicks = TURN180_TICKS;
+  }
 }
 
 /**
   * Determines if the player is on ground and performs conditional updates.
   */
 virtual void HandleOnGround() {
+  self.Player.OnGround =
+    // On top of or under the floor
+    self.Pos.Z <= self.FloorZ ||
+    // On top of map object
+    self.bOnMobj ||
+    // On top of an MBF bouncer (a type of missle)
+    self.bMBFBouncer ||
+    // Noclip cheat enabled (mode 2)
+    self.Player.Cheats & CF_NOCLIP2;
+
+  if (self.Player.OnGround) {
+    self.AirTics = 0;
+  } else {
+    self.AirTics += 1;
+  }
 }
 
 /**
   * Determines the general movement conditions of the player.
   */
 virtual void HandleMoveState() {
+  if (self.WaterLevel == 3) {
+    self.MoveState = AA_MOVE_SWIMMING;
+  } else if (self.Player.OnGround) {
+    self.MoveState = AA_MOVE_STEPPING;
+  } else {
+    self.MoveState = AA_MOVE_AIRBORNE;
+  }
 }
 
 /**
@@ -425,12 +558,51 @@ virtual void HandleMoveState() {
   * true.
   */
 virtual bool HandleFrozenMovement() {
+  let _player = self.Player;
+  UserCmd _cmd = _player.Cmd;
+  bool _totally_frozen = _player.IsTotallyFrozen();
+  
+  if (_totally_frozen) {
+    if (GameState == GS_TITLELEVEL) {
+      _cmd.Buttons = 0;
+    } else {
+      _cmd.Buttons &= BT_USE;
+    }
+    _cmd.Pitch = 0;
+    _cmd.Yaw = 0;
+    _cmd.Roll = 0;
+    _cmd.ForwardMove = 0;
+    _cmd.SideMove = 0;
+    _cmd.UpMove = 0;
+    _Player.TurnTicks = 0;
+  } else if (_player.Cheats & CF_FROZEN) {
+    _cmd.ForwardMove = 0;
+    _cmd.SideMove = 0;
+    _cmd.UpMove = 0;
+  }
+  
+  if (self.ReactionTime) {
+    self.ReactionTime--;
+  }
+  
+  return _totally_frozen;
 }
 
 /**
   * Calls special strafing method depending on player's `MoveState`.
   */
 virtual void HandleStrafeMovement(double _input_force, double _input_angle) {
+  switch(self.MoveState) {
+    case(AA_MOVE_SWIMMING):
+      self.HandleWaterStrafing(_input_force, _input_angle);
+      break;
+    case(AA_MOVE_STEPPING):
+      self.HandleGroundStrafing(_input_force, _input_angle);
+      break;
+    case(AA_MOVE_AIRBORNE):
+      self.HandleAirStrafing(_input_force, _input_angle);
+      break;
+  }
 }
 
 /**
@@ -439,6 +611,13 @@ virtual void HandleStrafeMovement(double _input_force, double _input_angle) {
   * Running is not possible.
   */
 virtual void HandleAirStrafing(double _input_force, double _input_angle) {
+  self.HandleStamina(false);
+  
+  double _move_force = _input_force * self.AirStrafeMult;
+  double _move_angle = self.Angle - _input_angle;
+
+  self.Thrust(_move_force, _move_angle);
+  self.ApplyXYVelScale(self.AirResistance);
 }
 
 /**
@@ -447,6 +626,32 @@ virtual void HandleAirStrafing(double _input_force, double _input_angle) {
   * Takes into account running and crouching.
   */
 virtual void HandleGroundStrafing(double _input_force, double _input_angle) {
+  let _allow_stamina = true;
+
+  double _move_force = _input_force;
+  double _move_angle = self.Angle - _input_angle;
+
+  if (self.CanCrouch() && self.Player.CrouchFactor != 1) {
+    _move_force *= self.Player.CrouchFactor * self.CrouchStrafeMult;
+    _allow_stamina = false;
+  }
+  
+  if (_input_force < 0.5) {
+    _allow_stamina = false;
+  }
+
+  if (self.HandleStamina(_allow_stamina)) {
+    _move_force *= self.SpeedStrafeMult;
+  }
+  
+  self.Friction =
+    (_input_force == 0.0) ?
+    0.8 * self.Default.Friction :
+    self.Default.Friction;
+  
+  _move_force *= self.Speed;
+  
+  self.Thrust(_move_force, _move_angle);
 }
 
 /**
@@ -455,6 +660,13 @@ virtual void HandleGroundStrafing(double _input_force, double _input_angle) {
   * Running is not possible within this method.
   */
 virtual void HandleWaterStrafing(double _input_force, double _input_angle) {
+  self.HandleStamina(false);
+
+  double _move_force = _input_force * self.WaterStrafeMult;
+  double _move_angle = self.Angle - _input_angle;
+    
+  self.Thrust(_move_force, _move_angle);
+  self.ApplyXYVelScale(self.WaterResistance);
 }
 
 /**
@@ -470,6 +682,49 @@ virtual void HandleWaterStrafing(double _input_force, double _input_angle) {
   * strafe movement direction.
   */
 virtual void HandleJumpMovement(double _input_force, double _input_angle) {
+  if (self.AirTics > JUMP_GRACE_TICS && self.JumpCount == 0) {
+    self.JumpCount++;
+  }
+
+  if (self.Input.JumpButton.Get()) {
+    bool _initiating = self.JumpTics == 0;
+
+    if (_initiating) {
+      if (self.JumpCount >= self.MaxJumps) {
+        return;
+      } else {
+        self.JumpCount++;
+      }
+    }
+
+    if (self.JumpTics > 0 && self.AirTics == 0) {
+      self.Input.JumpButton.Lock();
+    }
+
+    if (_initiating) {
+      self.Vel.Z = self.JumpZ;
+      self.Thrust(_input_force * self.Speed, self.Angle - _input_angle);
+    } else {
+      self.Vel.Z += self.JumpZ / Double(self.JumpTics);
+      self.Thrust(_input_force * self.Speed / Double(self.JumpTics), self.Angle - _input_angle);
+    } 
+
+    self.JumpTics++;
+    self.bOnMobj = false;
+  
+    if (!(self.Player.Cheats & CF_PREDICTING)) {
+      A_StartSound("*jump", CHAN_BODY);
+    }
+  } else {
+    if (self.AirTics == 0) {
+      self.JumpTics = 0;
+      self.JumpCount = 0;
+    }
+
+    if (self.JumpCount < self.MaxJumps) {
+      self.JumpTics = 0;
+    }
+  }
 }
 
 /**
@@ -478,6 +733,33 @@ virtual void HandleJumpMovement(double _input_force, double _input_angle) {
   * Returns `true` if stamina was used and `false` otherwise.
   */
 virtual bool HandleStamina(bool _allow) {
+  if (_allow) {
+    if (self.Input.SpeedButton.Get()) {
+      if (self.CurrentStamina > self.StaminaDecRate) {
+        self.CurrentStamina -= self.StaminaDecRate;
+        return true;
+      } else {
+        self.CurrentStamina = Min(
+          self.CurrentStamina + self.StaminaIncRate,
+          self.MaxStamina
+        );
+        self.Input.SpeedButton.Lock();
+        return false;
+      }
+    } else {
+      self.CurrentStamina = Min(
+        self.CurrentStamina + self.StaminaIncRate,
+        self.MaxStamina
+      );
+      return false;
+    }
+  } else {
+    self.CurrentStamina = Min(
+      self.CurrentStamina + self.StaminaIncRate,
+      self.MaxStamina
+    );
+    return false;
+  }
 }
 
 /**
@@ -486,4 +768,33 @@ virtual bool HandleStamina(bool _allow) {
   * This is intended to be called without prediction.
   */
 virtual void HandlePlayerFlashing() {
+  let _player = self.Player;
+
+  if (_player.DamageCount) {
+    _player.DamageCount--;
+  }
+
+  if (_player.BonusCount) {
+    _player.BonusCount--;
+  }
+  
+  if (_player.HazardCount)
+  {
+    _player.HazardCount--;
+
+    if (_player.HazardInterval <= 0) {
+      player.hazardinterval = 32; // repair invalid hazardinterval
+      if (
+        !(Level.MapTime % _player.HazardInterval) &&
+        _player.HazardCount > 16 * TICRATE)
+      _player.Mo.DamageMobj(NULL, NULL, 5, _player.HazardType);
+    }
+  }
+}
+
+/**
+  * TODO: Probably remove and replace with a custom BobWeapon?
+  */
+virtual void HandleViewBob() {
+  self.Player.ViewZ = self.Pos.Z + self.ViewHeight;
 }
