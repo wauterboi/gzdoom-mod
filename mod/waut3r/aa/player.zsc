@@ -412,6 +412,8 @@ override void PlayerThink() {
     self.AliveThink();
   }
 
+  self.CalcHeight();
+
   if (!(_player.Cheats & CF_PREDICTING)) {
     self.HandlePlayerFlashing();
     self.CheckPoison();
@@ -465,7 +467,6 @@ virtual void AliveThink() {
   self.CheckCrouch(false);
   self.HandleStrafeMovement(_input_force, _input_angle);
   self.HandleJumpMovement(_input_force, _input_angle);
-  self.HandleViewBob();
 }
 
 /**
@@ -794,8 +795,32 @@ virtual void HandlePlayerFlashing() {
 }
 
 /**
-  * TODO: Probably remove and replace with a custom BobWeapon?
+  * Sets the camera's height to simulate bobbing
   */
-virtual void HandleViewBob() {
+override void CalcHeight() {
   self.Player.ViewZ = self.Pos.Z + self.ViewHeight + self.Player.CrouchOffset;
+  Console.PrintF("%f", self.Player.ViewZ);
+}
+
+/**
+  * Set's the weapon's position on-screen to simulate bobbing
+  */
+override Vector2 BobWeapon(double ticfrac) {
+  let _player = self.Player;
+
+  if (!_player) {
+    return (0, 0);
+  }
+
+  let _weapon = _player.ReadyWeapon;
+
+  if (!_weapon || _weapon.bDontBob) {
+    return (0, 0);
+  }
+
+  double _bob_speed = _weapon.BobSpeed * 128.0;
+  double _range_x = _weapon.BobRangeX;
+  double _range_y = _weapon.BobRangeY;
+
+  return (0, 0);
 }
